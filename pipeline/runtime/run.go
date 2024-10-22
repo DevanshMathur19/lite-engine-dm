@@ -42,8 +42,6 @@ func executeRunStep(ctx context.Context, f RunFunc, r *api.StartStepRequest, out
 	}
 
 	if r.ScratchDir != "" {
-		// Plugins can use this directory as a scratch space to store temporary files.
-		// It will get cleaned up after a destroy.
 		step.Envs["HARNESS_SCRATCH_DIR"] = r.ScratchDir
 	}
 
@@ -115,6 +113,7 @@ func executeRunStep(ctx context.Context, f RunFunc, r *api.StartStepRequest, out
 
 	exportEnvs, _ := fetchExportedVarsFromEnvFile(exportEnvFile, out, useCINewGodotEnvVersion)
 	artifact, _ := fetchArtifactDataFromArtifactFile(artifactFile, out)
+
 	if exited != nil && exited.Exited && exited.ExitCode == 0 {
 		outputs, err := fetchExportedVarsFromEnvFile(outputFile, out, useCINewGodotEnvVersion) //nolint:govet
 		outputsV2 := []*api.OutputV2{}
@@ -146,7 +145,7 @@ func executeRunStep(ctx context.Context, f RunFunc, r *api.StartStepRequest, out
 			}
 		}
 
-		// checking exported secrets from plugins if any
+		// Check for any exported secrets from plugins if any
 		if _, err := os.Stat(outputSecretsFile); err == nil {
 			secrets, err := fetchExportedVarsFromEnvFile(outputSecretsFile, out, useCINewGodotEnvVersion)
 			if err != nil {
@@ -164,5 +163,28 @@ func executeRunStep(ctx context.Context, f RunFunc, r *api.StartStepRequest, out
 
 		return exited, outputs, exportEnvs, artifact, outputsV2, string(optimizationState), finalErr
 	}
+
+	// Fetch error message from DRONE_OUTPUT if it exists
+	pluginErrorMessage, errMsgErr := fetchErrorMessageFromEnvFile(outputFile, out)
+	if errMsgErr != nil {
+		log.WithError(errMsgErr).Errorln("failed to fetch error message from env file")
+	}
+	
+	// Return error message if available
+	if pluginErrorMessage != "" {
+		return exited, nil, exportEnvs, artifact, nil, string(optimizationState), fmt.Errorf("plugin error: %s", pluginErrorMessage)
+	}
+
 	return exited, nil, exportEnvs, artifact, nil, string(optimizationState), err
+}
+
+func fetchErrorMessageFromEnvFile(envFile string, out io.Writer) (string, error) {
+	envs, err := fetchExportedVarsFromEnvFile(envFile, out, false)
+	if err != nil {
+		return "", err
+	}
+	if errorMessage, found := envs["PLUGIN_ERROR_MESSAGE"]; found {
+		return errorMessage, nil
+	}
+	return "", nil
 }
